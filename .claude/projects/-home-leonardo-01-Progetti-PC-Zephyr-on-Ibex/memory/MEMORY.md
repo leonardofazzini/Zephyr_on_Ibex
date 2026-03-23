@@ -1,0 +1,1 @@
+- [project_goal.md](project_goal.md) — Main project: porting Zephyr RTOS to Ibex RISC-V core (Secure-Ibex variant in hw/Secure-Ibex submodule)
