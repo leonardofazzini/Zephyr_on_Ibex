@@ -1,0 +1,10 @@
+# Copyright (c) 2026 Leonardo Fazzini
+# SPDX-License-Identifier: Apache-2.0
+
+config SOC_SECURE_IBEX
+	select ATOMIC_OPERATIONS_C
+	select INCLUDE_RESET_VECTOR
+	select RISCV
+	select RISCV_PRIVILEGED
+	select RISCV_VECTORED_MODE
+	select GEN_IRQ_VECTOR_TABLE

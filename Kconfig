@@ -1,0 +1,4 @@
+# Copyright (c) 2026 Leonardo Fazzini
+# SPDX-License-Identifier: Apache-2.0
+
+rsource "drivers/serial/Kconfig.ibex_uart"

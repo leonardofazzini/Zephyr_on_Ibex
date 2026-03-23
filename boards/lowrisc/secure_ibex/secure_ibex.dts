@@ -1,0 +1,32 @@
+/*
+ * Copyright (c) 2026 Leonardo Fazzini
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Board device tree for Secure-Ibex on Digilent Arty A7.
+ */
+
+/dts-v1/;
+
+#include <lowrisc/secure_ibex.dtsi>
+
+/ {
+	model = "Secure-Ibex Reference System on Arty A7";
+	compatible = "lowrisc,secure-ibex";
+
+	chosen {
+		zephyr,console = &uart0;
+		zephyr,shell-uart = &uart0;
+		zephyr,sram = &ram0;
+	};
+};
+
+&uart0 {
+	status = "okay";
+	clock-frequency = <50000000>;
+	current-speed = <115200>;
+};
+
+&mtimer {
+	status = "okay";
+};

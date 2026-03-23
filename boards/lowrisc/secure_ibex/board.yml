@@ -1,0 +1,6 @@
+board:
+  name: secure_ibex
+  full_name: Secure-Ibex Reference System on Arty A7
+  vendor: lowrisc
+  socs:
+  - name: secure_ibex

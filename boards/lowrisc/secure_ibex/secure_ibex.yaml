@@ -1,0 +1,14 @@
+identifier: secure_ibex
+name: Secure-Ibex Reference System
+type: mcu
+arch: riscv
+toolchain:
+  - zephyr
+ram: 128
+testing:
+  ignore_tags:
+    - net
+    - bluetooth
+supported:
+  - uart
+vendor: lowrisc

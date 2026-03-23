@@ -1,0 +1,8 @@
+# Python virtual environment
+.venv/
+
+# Zephyr workspace (managed by west, not by this repo)
+zephyr-workspace/
+
+# Build artifacts
+build/

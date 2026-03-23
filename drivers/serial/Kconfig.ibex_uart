@@ -1,0 +1,11 @@
+# Copyright (c) 2026 Leonardo Fazzini
+# SPDX-License-Identifier: Apache-2.0
+
+config UART_IBEX
+	bool "Ibex Reference System UART driver"
+	default y
+	depends on DT_HAS_LOWRISC_IBEX_UART_ENABLED
+	select SERIAL_HAS_DRIVER
+	help
+	  Enable the UART driver for the Ibex Reference System.
+	  Simple 3-register UART with RX/TX FIFOs.

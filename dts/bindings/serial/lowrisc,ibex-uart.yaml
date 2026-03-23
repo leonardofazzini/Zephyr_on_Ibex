@@ -1,0 +1,22 @@
+# Copyright (c) 2026 Leonardo Fazzini
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Ibex Reference System UART controller.
+  Simple 3-register UART: RX (0x0), TX (0x4), STATUS (0x8).
+  STATUS bit 0 = RX FIFO empty, bit 1 = TX FIFO full.
+
+compatible: "lowrisc,ibex-uart"
+
+include: uart-controller.yaml
+
+properties:
+  reg:
+    required: true
+
+  clock-frequency:
+    type: int
+    description: SoC clock frequency driving the UART (used for baud calc in HW, not SW)
+
+  interrupts-extended:
+    description: IRQ line for RX data available (level-triggered when RX FIFO not empty)

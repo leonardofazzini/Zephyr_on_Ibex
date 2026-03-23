@@ -1,0 +1,74 @@
+/*
+ * Copyright (c) 2026 Leonardo Fazzini
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Device tree include for the Secure-Ibex Reference System SoC.
+ * Based on hw/Secure-Ibex RTL (ibex_reference_system_core.sv).
+ */
+
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+	compatible = "lowrisc,secure-ibex";
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		cpu@0 {
+			device_type = "cpu";
+			reg = <0>;
+			status = "okay";
+			compatible = "lowrisc,ibex", "riscv";
+			riscv,isa-base = "rv32i";
+			riscv,isa-extensions = "i", "m", "c", "zicsr", "zifencei";
+
+			hlic: interrupt-controller {
+				#interrupt-cells = <1>;
+				interrupt-controller;
+				compatible = "riscv,cpu-intc";
+			};
+		};
+	};
+
+	soc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "simple-bus";
+		ranges;
+
+		ram0: memory@100000 {
+			device_type = "memory";
+			reg = <0x00100000 0x20000>;
+		};
+
+		mtimer: timer@80000000 {
+			compatible = "riscv,machine-timer";
+			reg = <0x80000000 0x8 0x80000008 0x8>;
+			reg-names = "mtime", "mtimecmp";
+			interrupts-extended = <&hlic 7>;
+		};
+
+		uart0: serial@80001000 {
+			compatible = "lowrisc,ibex-uart";
+			reg = <0x80001000 0x1000>;
+			clock-frequency = <50000000>;
+			current-speed = <115200>;
+			interrupts-extended = <&hlic 16>;
+			status = "disabled";
+		};
+
+		gpio0: gpio@80002000 {
+			compatible = "lowrisc,ibex-gpio";
+			reg = <0x80002000 0x1000>;
+			status = "disabled";
+		};
+
+		pwm0: pwm@80003000 {
+			compatible = "lowrisc,ibex-pwm";
+			reg = <0x80003000 0x1000>;
+			status = "disabled";
+		};
+	};
+};

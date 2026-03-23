@@ -1,0 +1,8 @@
+# Copyright (c) 2026 Leonardo Fazzini
+# SPDX-License-Identifier: Apache-2.0
+
+config SOC_SECURE_IBEX
+	bool
+
+config SOC
+	default "secure_ibex" if SOC_SECURE_IBEX

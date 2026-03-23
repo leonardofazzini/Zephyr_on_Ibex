@@ -1,0 +1,298 @@
+# Makefile for Verilator simulation of Secure-Ibex
+# Bypasses FuseSoC/primgen by directly specifying all RTL and C++ files.
+#
+# Usage:
+#   make -f Makefile.verilator build       # Verilate + compile
+#   make -f Makefile.verilator sim ELF=path/to/zephyr.elf  # Run simulation
+#   make -f Makefile.verilator clean       # Clean build artifacts
+
+# ============================================================================
+# Project paths
+# ============================================================================
+ROOT      := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))
+HW        := $(ROOT)/hw/Secure-Ibex
+
+# ============================================================================
+# Tool configuration
+# ============================================================================
+VERILATOR     ?= verilator
+MAKE_THREADS  ?= $(shell nproc)
+
+# ============================================================================
+# Parameters
+# ============================================================================
+TOPLEVEL     := ibex_reference_system
+ELF          ?= $(ROOT)/zephyr-workspace/build/zephyr/zephyr.elf
+
+# ============================================================================
+# Directory shorthands (all inside the submodule)
+# ============================================================================
+IBEX          := $(HW)/vendor/lowrisc_ibex
+IBEX_RTL      := $(IBEX)/rtl
+IBEX_SHARED   := $(IBEX)/shared/rtl
+PRIM_RTL      := $(IBEX)/vendor/lowrisc_ip/ip/prim/rtl
+PRIM_GENERIC  := $(IBEX)/vendor/lowrisc_ip/ip/prim_generic/rtl
+PRIM_WRAPPERS := $(IBEX)/dv/uvm/core_ibex/common/prim
+DV_VERILATOR  := $(IBEX)/vendor/lowrisc_ip/dv/verilator
+DV_SV         := $(IBEX)/vendor/lowrisc_ip/dv/sv
+OPENTITAN     := $(HW)/vendor/lowrisc_opentitan
+PULP_DBG_OT   := $(OPENTITAN)/hw/vendor/pulp_riscv_dbg
+
+BUILD_DIR     := $(ROOT)/build/verilator
+
+# ============================================================================
+# SystemVerilog / Verilog source files (ORDER MATTERS for packages)
+# ============================================================================
+# -- Packages (must come first) --
+SV_PKGS := \
+  $(PRIM_WRAPPERS)/prim_pkg.sv \
+  $(PRIM_RTL)/prim_ram_1p_pkg.sv \
+  $(PRIM_RTL)/prim_ram_2p_pkg.sv \
+  $(PRIM_RTL)/prim_secded_pkg.sv \
+  $(PRIM_RTL)/prim_util_pkg.sv \
+  $(PRIM_RTL)/prim_mubi_pkg.sv \
+  $(PRIM_RTL)/prim_cipher_pkg.sv \
+  $(IBEX_RTL)/ibex_pkg.sv \
+  $(IBEX_RTL)/ibex_tracer_pkg.sv \
+  $(PULP_DBG_OT)/src/dm_pkg.sv
+
+# -- Prim assert (included by many files, but also instantiated directly) --
+SV_PRIM_ASSERT := \
+  $(PRIM_RTL)/prim_assert.sv
+
+# -- Abstract prim wrappers (stand-in for primgen-generated files) --
+SV_PRIM_WRAPPERS := \
+  $(PRIM_WRAPPERS)/prim_buf.sv \
+  $(PRIM_WRAPPERS)/prim_clock_gating.sv \
+  $(PRIM_WRAPPERS)/prim_clock_mux2.sv \
+  $(PRIM_WRAPPERS)/prim_flop.sv \
+  $(PRIM_WRAPPERS)/prim_ram_1p.sv
+
+# -- Prim generic implementations --
+SV_PRIM_GENERIC := \
+  $(PRIM_GENERIC)/prim_generic_buf.sv \
+  $(PRIM_GENERIC)/prim_generic_clock_gating.sv \
+  $(PRIM_GENERIC)/prim_generic_clock_mux2.sv \
+  $(PRIM_GENERIC)/prim_generic_flop.sv \
+  $(PRIM_GENERIC)/prim_generic_ram_1p.sv \
+  $(PRIM_GENERIC)/prim_generic_ram_2p.sv
+
+# -- Prim modules used by the Ibex core --
+SV_PRIM_MODULES := \
+  $(PRIM_RTL)/prim_lfsr.sv \
+  $(PRIM_RTL)/prim_onehot_check.sv \
+  $(PRIM_RTL)/prim_secded_inv_39_32_enc.sv \
+  $(PRIM_RTL)/prim_secded_inv_39_32_dec.sv \
+  $(PRIM_RTL)/prim_secded_inv_28_22_enc.sv \
+  $(PRIM_RTL)/prim_secded_inv_28_22_dec.sv \
+  $(PRIM_RTL)/prim_count.sv \
+  $(PRIM_RTL)/prim_sparse_fsm_flop.sv
+
+# -- Ibex core RTL --
+SV_IBEX_CORE := \
+  $(IBEX_RTL)/ibex_alu.sv \
+  $(IBEX_RTL)/ibex_branch_predict.sv \
+  $(IBEX_RTL)/ibex_compressed_decoder.sv \
+  $(IBEX_RTL)/ibex_controller.sv \
+  $(IBEX_RTL)/ibex_counter.sv \
+  $(IBEX_RTL)/ibex_cs_registers.sv \
+  $(IBEX_RTL)/ibex_csr.sv \
+  $(IBEX_RTL)/ibex_decoder.sv \
+  $(IBEX_RTL)/ibex_dummy_instr.sv \
+  $(IBEX_RTL)/ibex_ex_block.sv \
+  $(IBEX_RTL)/ibex_fetch_fifo.sv \
+  $(IBEX_RTL)/ibex_icache.sv \
+  $(IBEX_RTL)/ibex_id_stage.sv \
+  $(IBEX_RTL)/ibex_if_stage.sv \
+  $(IBEX_RTL)/ibex_load_store_unit.sv \
+  $(IBEX_RTL)/ibex_lockstep.sv \
+  $(IBEX_RTL)/ibex_multdiv_fast.sv \
+  $(IBEX_RTL)/ibex_multdiv_slow.sv \
+  $(IBEX_RTL)/ibex_pmp.sv \
+  $(IBEX_RTL)/ibex_prefetch_buffer.sv \
+  $(IBEX_RTL)/ibex_register_file_ff.sv \
+  $(IBEX_RTL)/ibex_register_file_fpga.sv \
+  $(IBEX_RTL)/ibex_register_file_latch.sv \
+  $(IBEX_RTL)/ibex_wb_stage.sv \
+  $(IBEX_RTL)/ibex_core.sv \
+  $(IBEX_RTL)/ibex_top.sv
+
+# -- Shared bus / memory / peripherals --
+SV_SHARED := \
+  $(IBEX_SHARED)/bus.sv \
+  $(IBEX_SHARED)/timer.sv \
+  $(IBEX_SHARED)/ram_1p.sv \
+  $(IBEX_SHARED)/ram_2p.sv \
+  $(IBEX_SHARED)/sim/simulator_ctrl.sv
+
+# -- Debug module (OpenTitan variant) --
+SV_DEBUG := \
+  $(PULP_DBG_OT)/src/dm_csrs.sv \
+  $(PULP_DBG_OT)/src/dm_mem.sv \
+  $(PULP_DBG_OT)/src/dm_sba.sv \
+  $(PULP_DBG_OT)/debug_rom/debug_rom.sv \
+  $(PULP_DBG_OT)/src/dm_top.sv
+
+# -- DPI SV wrappers --
+SV_DPI := \
+  $(OPENTITAN)/hw/dv/dpi/uartdpi/uartdpi.sv \
+  $(OPENTITAN)/hw/dv/dpi/dmidpi/dmidpi.sv
+
+# -- Project peripherals --
+SV_PERIPH := \
+  $(HW)/rtl/system/debounce.sv \
+  $(HW)/rtl/system/gpio.sv \
+  $(HW)/rtl/system/pwm.sv \
+  $(HW)/rtl/system/pwm_wrapper.sv \
+  $(HW)/rtl/system/uart.sv \
+  $(HW)/rtl/system/spi_host.sv \
+  $(HW)/rtl/system/spi_top.sv
+
+# -- System integration + top --
+SV_SYSTEM := \
+  $(HW)/rtl/system/ibex_reference_system_core.sv \
+  $(HW)/rtl/top_simulation/ibex_reference_system.sv
+
+# All SV files in compilation order
+SV_SRCS := \
+  $(SV_PKGS) \
+  $(SV_PRIM_ASSERT) \
+  $(SV_PRIM_WRAPPERS) \
+  $(SV_PRIM_GENERIC) \
+  $(SV_PRIM_MODULES) \
+  $(SV_IBEX_CORE) \
+  $(SV_SHARED) \
+  $(SV_DEBUG) \
+  $(SV_DPI) \
+  $(SV_PERIPH) \
+  $(SV_SYSTEM)
+
+# ============================================================================
+# Include directories for `include directives (-I flags)
+# ============================================================================
+SV_INCDIRS := \
+  -I$(PRIM_RTL) \
+  -I$(IBEX_RTL) \
+  -I$(DV_SV)/dv_utils \
+  -I$(HW)/dv/verilator
+
+# ============================================================================
+# C / C++ source files for the DPI testbench
+# ============================================================================
+CC_SRCS := \
+  $(OPENTITAN)/hw/dv/dpi/uartdpi/uartdpi.c \
+  $(OPENTITAN)/hw/dv/dpi/dmidpi/dmidpi.c \
+  $(OPENTITAN)/hw/dv/dpi/common/tcp_server/tcp_server.c \
+  $(DV_VERILATOR)/cpp/mem_area.cc \
+  $(DV_VERILATOR)/cpp/dpi_memutil.cc \
+  $(DV_VERILATOR)/cpp/sv_scoped.cc \
+  $(DV_VERILATOR)/cpp/verilator_memutil.cc \
+  $(DV_VERILATOR)/simutil_verilator/cpp/verilated_toplevel.cc \
+  $(DV_VERILATOR)/simutil_verilator/cpp/verilator_sim_ctrl.cc \
+  $(IBEX)/dv/verilator/pcount/cpp/ibex_pcounts.cc \
+  $(HW)/dv/verilator/ibex_reference_system.cc \
+  $(HW)/dv/verilator/ibex_reference_system_main.cc
+
+# ============================================================================
+# C / C++ include directories
+# ============================================================================
+CC_INCDIRS := \
+  -I$(DV_VERILATOR)/cpp \
+  -I$(DV_VERILATOR)/simutil_verilator/cpp \
+  -I$(IBEX)/dv/verilator/pcount/cpp \
+  -I$(OPENTITAN)/hw/dv/dpi/uartdpi \
+  -I$(OPENTITAN)/hw/dv/dpi/dmidpi \
+  -I$(OPENTITAN)/hw/dv/dpi/common/tcp_server \
+  -I$(HW)/dv/verilator
+
+# ============================================================================
+# Verilator flags
+# ============================================================================
+VERILATOR_FLAGS := \
+  --cc \
+  --exe \
+  --trace \
+  --trace-fst \
+  --trace-structs \
+  --trace-params \
+  --trace-max-array 1024 \
+  --unroll-count 72 \
+  -Wall \
+  -Wno-fatal \
+  -Wwarn-IMPERFECTSCH \
+  --top-module $(TOPLEVEL) \
+  --Mdir $(BUILD_DIR) \
+  -DVERILATOR \
+  $(SV_INCDIRS) \
+  -CFLAGS "$(CC_INCDIRS) -std=c++14 -Wall -DVM_TRACE_FMT_FST -DTOPLEVEL_NAME=$(TOPLEVEL)" \
+  -LDFLAGS "-pthread -lutil -lelf" \
+  $(HW)/dv/verilator/reference_system_verilator_lint.vlt
+
+# ============================================================================
+# prim_ram_2p wrapper (not provided by the repo; we generate it inline)
+# This is the "abstract prim" wrapper that primgen would normally create.
+# ============================================================================
+PRIM_RAM_2P_WRAPPER := $(BUILD_DIR)/prim_ram_2p.sv
+
+$(PRIM_RAM_2P_WRAPPER): | $(BUILD_DIR)
+	@echo "Generating prim_ram_2p wrapper..."
+	@echo '// Auto-generated abstract prim wrapper for prim_ram_2p' > $@
+	@echo '// (replaces the FuseSoC primgen-generated file)' >> $@
+	@echo '' >> $@
+	@echo 'module prim_ram_2p import prim_ram_2p_pkg::*; #(' >> $@
+	@echo '  parameter  int Width           = 32,' >> $@
+	@echo '  parameter  int Depth           = 128,' >> $@
+	@echo '  parameter  int DataBitsPerMask = 1,' >> $@
+	@echo '  parameter      MemInitFile     = "",' >> $@
+	@echo '  localparam int Aw              = $$clog2(Depth)' >> $@
+	@echo ') (' >> $@
+	@echo '  input clk_a_i,' >> $@
+	@echo '  input clk_b_i,' >> $@
+	@echo '  input                    a_req_i,' >> $@
+	@echo '  input                    a_write_i,' >> $@
+	@echo '  input        [Aw-1:0]    a_addr_i,' >> $@
+	@echo '  input        [Width-1:0] a_wdata_i,' >> $@
+	@echo '  input  logic [Width-1:0] a_wmask_i,' >> $@
+	@echo '  output logic [Width-1:0] a_rdata_o,' >> $@
+	@echo '  input                    b_req_i,' >> $@
+	@echo '  input                    b_write_i,' >> $@
+	@echo '  input        [Aw-1:0]    b_addr_i,' >> $@
+	@echo '  input        [Width-1:0] b_wdata_i,' >> $@
+	@echo '  input  logic [Width-1:0] b_wmask_i,' >> $@
+	@echo '  output logic [Width-1:0] b_rdata_o,' >> $@
+	@echo '  input ram_2p_cfg_t       cfg_i' >> $@
+	@echo ');' >> $@
+	@echo '  if (1) begin : gen_generic' >> $@
+	@echo '    prim_generic_ram_2p #(' >> $@
+	@echo '      .Depth(Depth),' >> $@
+	@echo '      .Width(Width),' >> $@
+	@echo '      .DataBitsPerMask(DataBitsPerMask),' >> $@
+	@echo '      .MemInitFile(MemInitFile)' >> $@
+	@echo '    ) u_impl_generic (' >> $@
+	@echo '      .*' >> $@
+	@echo '    );' >> $@
+	@echo '  end' >> $@
+	@echo 'endmodule' >> $@
+
+# ============================================================================
+# Build targets
+# ============================================================================
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+.PHONY: verilate build sim clean
+
+verilate: $(PRIM_RAM_2P_WRAPPER) | $(BUILD_DIR)
+	$(VERILATOR) $(VERILATOR_FLAGS) \
+	  $(SV_SRCS) \
+	  $(PRIM_RAM_2P_WRAPPER) \
+	  $(CC_SRCS)
+
+build: verilate
+	$(MAKE) -C $(BUILD_DIR) -f V$(TOPLEVEL).mk V$(TOPLEVEL) -j$(MAKE_THREADS)
+
+sim: build
+	cd $(HW) && $(BUILD_DIR)/V$(TOPLEVEL) --meminit=ram,$(ELF) --term-after-cycles=5000000
+
+clean:
+	rm -rf $(BUILD_DIR)
