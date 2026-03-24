@@ -780,7 +780,276 @@ Simulation statistics:
 | [`boards/lowrisc/secure_ibex/secure_ibex_defconfig`](../boards/lowrisc/secure_ibex/secure_ibex_defconfig) | Default config |
 | [`dts/riscv/lowrisc/secure_ibex.dtsi`](../dts/riscv/lowrisc/secure_ibex.dtsi) | SoC device tree |
 | [`dts/bindings/serial/lowrisc,ibex-uart.yaml`](../dts/bindings/serial/lowrisc,ibex-uart.yaml) | UART DTS binding |
-| [`drivers/serial/uart_ibex.c`](../drivers/serial/uart_ibex.c) | UART driver (polling) |
+| [`drivers/serial/uart_ibex.c`](../drivers/serial/uart_ibex.c) | UART driver (polling + interrupt-driven) |
+| [`drivers/serial/Kconfig.ibex_uart`](../drivers/serial/Kconfig.ibex_uart) | UART driver Kconfig |
+| [`drivers/serial/CMakeLists.txt`](../drivers/serial/CMakeLists.txt) | UART driver build |
+| [`zephyr/module.yml`](../zephyr/module.yml) | Out-of-tree module registration |
+| [`CMakeLists.txt`](../CMakeLists.txt) | Out-of-tree build entry point |
+| [`Kconfig`](../Kconfig) | Out-of-tree Kconfig entry point |
+| [`Makefile.verilator`](../Makefile.verilator) | Simulator build (bypasses FuseSoC) |
+| [`doc/secure_ibex_hw_description.md`](secure_ibex_hw_description.md) | Full HW documentation |
+
+---
+
+## Phase 9 — Interrupt-driven UART
+
+### Why interrupts matter
+
+The polling UART driver from Phase 6 works for `printk()` output, but it
+wastes CPU cycles spinning on the status register when waiting for input.
+More importantly, Zephyr's shell subsystem and many other components
+(Bluetooth, networking, logging backends) require the **interrupt-driven
+UART API** — they register a callback that fires asynchronously when data
+arrives.
+
+### Hardware interrupt behavior
+
+From the RTL (`uart.sv`, line 153):
+```verilog
+assign uart_irq_o = !rx_fifo_empty;
+```
+
+The IRQ is **level-triggered**: it stays asserted as long as there is data
+in the 128-byte RX FIFO. There is **no TX interrupt** — the hardware only
+signals RX data availability.
+
+The IRQ line connects to Ibex's fast interrupt input 0 (mcause 16), as
+wired in `ibex_reference_system_core.sv`:
+```verilog
+.irq_fast_i({14'b0, uart_irq})   // uart_irq → bit 0 → mcause 16
+```
+
+There is also **no interrupt enable/disable register** in the UART itself.
+The only way to mask the interrupt is at the CPU level (via the RISC-V
+`mie` CSR), which Zephyr's `irq_enable()` / `irq_disable()` handle.
+
+### Driver changes
+
+The driver was extended with the full `CONFIG_UART_INTERRUPT_DRIVEN` API,
+guarded by `#ifdef` so the polling-only build still works.
+
+**New data structure** — stores the callback and per-instance flags:
+```c
+struct uart_ibex_data {
+    uart_irq_callback_user_data_t cb;
+    void *cb_data;
+    bool tx_irq_enabled;
+    bool rx_irq_enabled;
+    bool in_isr;
+};
+```
+
+**New functions added**:
+
+| Function | Purpose |
+|---|---|
+| `fifo_fill()` | Write multiple bytes to TX FIFO (stops when full) |
+| `fifo_read()` | Read multiple bytes from RX FIFO (stops when empty) |
+| `irq_tx_enable()` | Set software flag + **kick-start** callback |
+| `irq_tx_disable()` | Clear software flag |
+| `irq_tx_ready()` | Returns 1 if TX enabled and FIFO not full |
+| `irq_tx_complete()` | Returns 1 if TX FIFO is not full |
+| `irq_rx_enable()` | Set software flag + `irq_enable(16)` |
+| `irq_rx_disable()` | Clear software flag + `irq_disable(16)` if TX also off |
+| `irq_rx_ready()` | Returns 1 if RX FIFO has data |
+| `irq_is_pending()` | Returns rx_ready OR tx_ready |
+| `irq_update()` | Returns 1 (no cached state to update) |
+| `irq_callback_set()` | Stores the user callback and data pointer |
+
+**The TX kick-start trick**:
+
+Since there is no hardware TX interrupt, when `irq_tx_enable()` is called
+(e.g. by the shell when it has output to send), the driver directly
+invokes the user callback:
+
+```c
+static void uart_ibex_irq_tx_enable(const struct device *dev)
+{
+    struct uart_ibex_data *data = dev->data;
+    data->tx_irq_enabled = true;
+
+    /* No HW TX interrupt — call the callback so it can fill the FIFO */
+    if (!data->in_isr && data->cb) {
+        data->cb(dev, data->cb_data);
+    }
+}
+```
+
+The `in_isr` guard prevents infinite recursion: the shell callback calls
+`irq_tx_enable()` from within the ISR, so without this guard we'd have
+the callback calling itself endlessly.
+
+**The ISR**:
+
+```c
+static void uart_ibex_isr(const struct device *dev)
+{
+    struct uart_ibex_data *data = dev->data;
+    if (data->cb) {
+        data->in_isr = true;
+        data->cb(dev, data->cb_data);
+        data->in_isr = false;
+    }
+}
+```
+
+The ISR fires whenever the RX FIFO has data (level-triggered). Inside the
+callback, the shell (or any user) calls `irq_rx_ready()` and `fifo_read()`
+to drain the FIFO, then `irq_tx_ready()` and `fifo_fill()` to send any
+pending output. Reading the RX FIFO clears the interrupt (since
+`uart_irq_o = !rx_fifo_empty`).
+
+**IRQ registration via init**:
+
+```c
+static int uart_ibex_init(const struct device *dev)
+{
+    const struct uart_ibex_config *cfg = dev->config;
+    cfg->irq_config_func(dev);    /* calls IRQ_CONNECT */
+    return 0;
+}
+```
+
+The `IRQ_CONNECT(DT_INST_IRQN(0), 0, uart_ibex_isr, ...)` macro registers
+our ISR for IRQ 16 (from the DTS `interrupts-extended = <&hlic 16>`).
+The actual interrupt is not enabled until `irq_rx_enable()` is called.
+
+### Kconfig changes
+
+```kconfig
+config UART_IBEX
+    ...
+    select SERIAL_SUPPORT_INTERRUPT
+```
+
+`SERIAL_SUPPORT_INTERRUPT` must be selected **unconditionally** (not behind
+`if UART_INTERRUPT_DRIVEN`) because it declares that the driver *supports*
+interrupts. This allows `CONFIG_UART_INTERRUPT_DRIVEN=y` to be set by the
+board defconfig. Selecting it conditionally on `UART_INTERRUPT_DRIVEN`
+creates a circular dependency.
+
+### Board defconfig changes
+
+Added to `secure_ibex_defconfig`:
+```
+CONFIG_UART_INTERRUPT_DRIVEN=y
+```
+
+---
+
+## Phase 10 — Zephyr shell
+
+### What is the Zephyr shell
+
+Zephyr includes an interactive command-line shell (`CONFIG_SHELL=y`) that
+works over UART. It provides built-in commands (`kernel threads`,
+`kernel uptime`, `device list`, etc.) and allows applications to register
+custom commands.
+
+### Configuration
+
+Added to `secure_ibex_defconfig`:
+```
+CONFIG_SHELL=y
+CONFIG_SHELL_BACKEND_SERIAL=y
+CONFIG_SHELL_BACKEND_SERIAL_API_POLLING=y
+```
+
+The shell backend automatically uses `zephyr,shell-uart` from the device
+tree `chosen` node (already set to `&uart0` in Phase 4).
+
+### Why polling backend for the shell
+
+The Zephyr shell backend has three API modes:
+1. **Interrupt-driven** (`SHELL_BACKEND_SERIAL_API_INTERRUPT_DRIVEN`) —
+   uses `uart_fifo_fill()` / `uart_fifo_read()` in ISR callbacks
+2. **Polling** (`SHELL_BACKEND_SERIAL_API_POLLING`) — uses `poll_out()` /
+   `poll_in()` with a kernel timer for RX polling
+3. **Async** (`SHELL_BACKEND_SERIAL_API_ASYNC`) — uses DMA-based async API
+
+The interrupt-driven mode fails on Secure-Ibex because of the missing
+TX interrupt. The TX path works as follows:
+
+1. Shell puts output data in a ring buffer
+2. Calls `uart_irq_tx_enable()`
+3. Our driver's kick-start calls the callback once
+4. Callback reads from ring buffer, fills the 128-byte TX FIFO
+5. Callback returns — **and TX stalls**
+
+The problem: after the initial kick-start, the callback is never called
+again because there is no HW TX IRQ. The ISR only fires on RX events
+(data received). If no characters arrive, the TX FIFO drains at baud
+rate but nobody refills it. Result: only the first ~128 bytes of output
+appear (the shell prompt `ESC[m` is just 3 bytes).
+
+The **polling backend** avoids this entirely: `poll_out()` sends each
+byte synchronously (spinning on STATUS.TX_FULL), and a kernel timer
+periodically calls `poll_in()` for RX. This is slightly less efficient
+but works reliably with our hardware.
+
+The interrupt-driven UART API is still available in the driver for
+applications that need asynchronous RX notifications (e.g., a UART-based
+protocol stack).
+
+### Memory usage
+
+| Sample | RAM usage | % of 128 KiB |
+|---|---|---|
+| hello_world (no shell) | ~16 KiB | 12% |
+| hello_world (with shell) | ~57 KiB | 44% |
+| shell_module | ~86 KiB | 66% |
+
+The shell adds significant overhead (~30 KiB for the shell subsystem,
+command processing, history buffer, etc.), but still fits comfortably in
+128 KiB.
+
+### Build and test
+
+```bash
+# Shell sample
+west build -b secure_ibex zephyr/samples/subsys/shell/shell_module -- -DDTC=/usr/bin/dtc
+
+# hello_world (also gets shell via defconfig)
+west build -b secure_ibex zephyr/samples/hello_world -- -DDTC=/usr/bin/dtc
+```
+
+### Simulation result
+
+```
+$ make -f Makefile.verilator sim
+=== UART OUTPUT (uart0.log) ===
+*** Booting Zephyr OS build v4.3.0-9462-g44ace049cd41 ***
+Hello World! secure_ibex/secure_ibex
+uart:~$
+```
+
+Both the hello_world message and the interactive shell prompt appear.
+The `uart:~$` prompt is ready to accept commands via the simulated PTY.
+
+Note: the simulator logs `Illegal instruction (hart 0) at PC 0x00100080`
+at cycle 15. This is a **benign tracer artifact** during the Ibex pipeline
+reset — the instruction at that address (`0x00010413` = `addi s0, sp, 0`)
+is valid RV32I. Execution proceeds normally after this message.
+
+---
+
+## Summary of created files
+
+| File | Purpose |
+|---|---|
+| [`soc/lowrisc/secure_ibex/soc.yml`](../soc/lowrisc/secure_ibex/soc.yml) | SoC declaration |
+| [`soc/lowrisc/secure_ibex/Kconfig.soc`](../soc/lowrisc/secure_ibex/Kconfig.soc) | SoC boolean option |
+| [`soc/lowrisc/secure_ibex/Kconfig`](../soc/lowrisc/secure_ibex/Kconfig) | Architectural features |
+| [`soc/lowrisc/secure_ibex/Kconfig.defconfig`](../soc/lowrisc/secure_ibex/Kconfig.defconfig) | Defaults (50 MHz, 32 IRQs) |
+| [`soc/lowrisc/secure_ibex/CMakeLists.txt`](../soc/lowrisc/secure_ibex/CMakeLists.txt) | Linker script |
+| [`boards/lowrisc/secure_ibex/board.yml`](../boards/lowrisc/secure_ibex/board.yml) | Board metadata |
+| [`boards/lowrisc/secure_ibex/secure_ibex.yaml`](../boards/lowrisc/secure_ibex/secure_ibex.yaml) | Board HW profile |
+| [`boards/lowrisc/secure_ibex/Kconfig.secure_ibex`](../boards/lowrisc/secure_ibex/Kconfig.secure_ibex) | Links board to SoC |
+| [`boards/lowrisc/secure_ibex/secure_ibex.dts`](../boards/lowrisc/secure_ibex/secure_ibex.dts) | Board device tree |
+| [`boards/lowrisc/secure_ibex/secure_ibex_defconfig`](../boards/lowrisc/secure_ibex/secure_ibex_defconfig) | Default config (with shell + IRQ UART) |
+| [`dts/riscv/lowrisc/secure_ibex.dtsi`](../dts/riscv/lowrisc/secure_ibex.dtsi) | SoC device tree |
+| [`dts/bindings/serial/lowrisc,ibex-uart.yaml`](../dts/bindings/serial/lowrisc,ibex-uart.yaml) | UART DTS binding |
+| [`drivers/serial/uart_ibex.c`](../drivers/serial/uart_ibex.c) | UART driver (polling + interrupt-driven) |
 | [`drivers/serial/Kconfig.ibex_uart`](../drivers/serial/Kconfig.ibex_uart) | UART driver Kconfig |
 | [`drivers/serial/CMakeLists.txt`](../drivers/serial/CMakeLists.txt) | UART driver build |
 | [`zephyr/module.yml`](../zephyr/module.yml) | Out-of-tree module registration |
@@ -795,6 +1064,6 @@ Simulation statistics:
 
 - **FPGA test on Arty A7** — synthesize and load on the real board
 - **GPIO driver** — for LEDs and switches
-- **Interrupt-driven UART** — switch from polling to IRQ-based console
-- **Zephyr shell** — enable the interactive shell over UART
 - **PWM driver** — to control the RGB LEDs
+- **SPI driver** — for external peripherals
+- **Zephyr logging backend** — structured logging over UART

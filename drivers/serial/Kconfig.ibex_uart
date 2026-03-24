@@ -6,6 +6,10 @@ config UART_IBEX
 	default y
 	depends on DT_HAS_LOWRISC_IBEX_UART_ENABLED
 	select SERIAL_HAS_DRIVER
+	select SERIAL_SUPPORT_INTERRUPT
 	help
 	  Enable the UART driver for the Ibex Reference System.
-	  Simple 3-register UART with RX/TX FIFOs.
+	  Simple 3-register UART with RX/TX FIFOs (128 bytes each).
+	  Supports polling and interrupt-driven modes.
+	  HW interrupt is RX-only (level: RX FIFO not empty);
+	  TX is kick-started in software.

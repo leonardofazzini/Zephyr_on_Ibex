@@ -227,6 +227,145 @@ To stop the simulation: `Ctrl+C`.
 | `--term-after-cycles=N` | Stop after N clock cycles |
 | `-t` | Enable tracing (generates `sim.fst` for GTKWave) |
 
+## Tested samples
+
+All samples below have been built and verified on the Verilator simulator.
+
+The general workflow is always the same:
+
+```bash
+# 1. Set up environment (once per terminal session)
+source .venv/bin/activate
+export ZEPHYR_SDK_INSTALL_DIR=~/.local/zephyr-sdk-1.0.0
+export ZEPHYR_BASE=$(pwd)/zephyr-workspace/zephyr
+export ZEPHYR_EXTRA_MODULES=$(pwd)
+
+# 2. Build
+cd zephyr-workspace
+rm -rf build
+west build -b secure_ibex zephyr/samples/<SAMPLE_PATH> -- -DDTC=/usr/bin/dtc
+
+# 3. Simulate (from project root)
+cd ..
+make -f Makefile.verilator sim
+
+# 4. Check output
+cat uart0.log
+```
+
+### hello_world
+
+```bash
+west build -b secure_ibex zephyr/samples/hello_world -- -DDTC=/usr/bin/dtc
+```
+
+Expected output (`uart0.log`):
+```
+*** Booting Zephyr OS build v4.3.0-... ***
+Hello World! secure_ibex/secure_ibex
+uart:~$
+```
+
+- RAM: ~57 KiB (44%) — includes the Zephyr shell, enabled by default
+- Proves: boot sequence, UART TX, console subsystem, shell init
+- Simulation: 50M cycles (~1 sec simulated) is enough
+
+### philosophers (Dining Philosophers)
+
+```bash
+west build -b secure_ibex zephyr/samples/philosophers -- \
+    -DDTC=/usr/bin/dtc -DCONFIG_SHELL=n -DCONFIG_SHELL_BACKEND_SERIAL=n
+```
+
+Expected output (`uart0.log`):
+```
+*** Booting Zephyr OS build v4.3.0-... ***
+Demo Description
+----------------
+An implementation of a solution to the Dining Philosophers problem ...
+
+Philosopher 4 [C:-1]   EATING  [  25 ms ]
+Philosopher 5 [C:-2]   EATING  [  25 ms ]
+Philosopher 3 [P: 0]   EATING  [  25 ms ]
+...
+```
+
+- RAM: ~33 KiB (25%)
+- Proves: **timer interrupts work** (k_sleep), preemptive multithreading,
+  mutex synchronization, thread priorities (cooperative C:-1/-2 and
+  preemptible P:0-3)
+- Simulation: 200M cycles (~4 sec simulated) to see multiple rounds.
+  Philosophers cycle through STARVING -> HOLDING ONE FORK -> EATING ->
+  THINKING states with randomized delays.
+- Shell is disabled here (`-DCONFIG_SHELL=n`) to keep output clean and
+  reduce RAM usage.
+
+### shell_module (Zephyr interactive shell)
+
+```bash
+west build -b secure_ibex zephyr/samples/subsys/shell/shell_module -- -DDTC=/usr/bin/dtc
+```
+
+Expected output (`uart0.log`):
+```
+uart:~$
+```
+
+- RAM: ~86 KiB (66%)
+- Proves: interrupt-driven UART RX, shell subsystem, command processing
+- Simulation: 50M cycles for the prompt to appear. To interact with the
+  shell, connect to the PTY printed at startup:
+  ```bash
+  screen /dev/pts/N
+  ```
+  Then type `help`, `kernel uptime`, `device list`, etc.
+- The shell uses polling backend for TX (no HW TX interrupt), and a
+  kernel timer for RX polling.
+
+### synchronization
+
+```bash
+west build -b secure_ibex zephyr/samples/synchronization -- \
+    -DDTC=/usr/bin/dtc -DCONFIG_SHELL=n -DCONFIG_SHELL_BACKEND_SERIAL=n
+```
+
+Expected output (`uart0.log`):
+```
+*** Booting Zephyr OS build v4.3.0-... ***
+thread_a: Hello World from cpu 0 on secure_ibex!
+thread_b: Hello World from cpu 0 on secure_ibex!
+thread_a: Hello World from cpu 0 on secure_ibex!
+thread_b: Hello World from cpu 0 on secure_ibex!
+...
+```
+
+- RAM: ~20 KiB (15%)
+- Proves: semaphore synchronization, k_sleep, two threads alternating
+- Simulation: 200M cycles to see several rounds of alternation.
+
+### Samples that do NOT work
+
+Samples requiring hardware not present on this board will fail to build:
+
+| Sample | Reason |
+|---|---|
+| `basic/blinky` | Requires `led0` alias (GPIO driver) |
+| `basic/threads` | Requires `led0`, `led1` aliases |
+| `bluetooth/*` | No Bluetooth hardware |
+| `net/*` | No network hardware |
+| `drivers/spi/*` | No SPI driver yet |
+| `sensor/*` | No sensor hardware |
+
+### Disabling the shell for lighter builds
+
+The shell is enabled by default in the board defconfig. To build any
+sample without it (saves ~40 KiB RAM):
+
+```bash
+west build -b secure_ibex zephyr/samples/<path> -- \
+    -DDTC=/usr/bin/dtc -DCONFIG_SHELL=n -DCONFIG_SHELL_BACKEND_SERIAL=n
+```
+
 ## Target hardware
 
 The Secure-Ibex SoC is a minimal RISC-V system built around the lowRISC Ibex core:

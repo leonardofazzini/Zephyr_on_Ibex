@@ -6,3 +6,7 @@ zephyr-workspace/
 
 # Build artifacts
 build/
+
+# log files
+*.log
+*.csv
