@@ -23,6 +23,8 @@ Zephyr_on_Ibex/
 ├── zephyr/module.yml            # Out-of-tree module registration
 ├── CMakeLists.txt               # Out-of-tree driver build
 ├── Kconfig                      # Out-of-tree driver Kconfig
+├── scripts/
+│   └── extract_standalone.sh    # Extract standalone build from west output
 ├── Makefile.verilator           # Verilator simulation build
 ├── .venv/                       # Python virtual environment
 └── README.md
@@ -365,6 +367,88 @@ sample without it (saves ~40 KiB RAM):
 west build -b secure_ibex zephyr/samples/<path> -- \
     -DDTC=/usr/bin/dtc -DCONFIG_SHELL=n -DCONFIG_SHELL_BACKEND_SERIAL=n
 ```
+
+## Standalone build (no west/cmake)
+
+If you want to write C code and compile it with just `make` — without
+dealing with west, cmake, or the Zephyr build system — use the extraction
+script. It pulls out everything you need from a single Zephyr build.
+
+### How it works
+
+1. You do one normal `west build` to generate headers and pre-compile
+   the Zephyr kernel, drivers, and libraries into `.a` files.
+2. The script copies those `.a` files, the linker script, and the
+   generated headers into a self-contained directory.
+3. You edit `src/main.c` and run `make` — only your code is recompiled,
+   then linked against the pre-built libraries. Fast and simple.
+
+### Setup (one time)
+
+```bash
+# Build any sample first (hello_world is the simplest)
+cd zephyr-workspace
+west build -b secure_ibex zephyr/samples/hello_world -- \
+    -DDTC=/usr/bin/dtc -DCONFIG_SHELL=n -DCONFIG_SHELL_BACKEND_SERIAL=n
+
+# Extract into a standalone directory
+cd ..
+scripts/extract_standalone.sh zephyr-workspace/build standalone_app
+```
+
+### Edit, build, simulate
+
+```bash
+# Edit your code
+nano standalone_app/src/main.c
+
+# Build (recompiles only your .c files — instant)
+cd standalone_app && make
+
+# Simulate
+cd ..
+make -f Makefile.verilator sim ELF=standalone_app/firmware.elf
+cat uart0.log
+```
+
+### What you get
+
+```
+standalone_app/
+├── src/main.c              ← your code (edit this, add more .c files)
+├── include/generated/      ← autoconf.h, devicetree_generated.h
+├── lib/*.a                 ← pre-built Zephyr (11 libraries)
+├── linker.cmd              ← linker script
+├── build_flags.mk          ← compiler flags (auto-extracted)
+└── Makefile                ← just run 'make'
+```
+
+### What you can use in your code
+
+Since you're linking against the full Zephyr kernel, you have access to
+all Zephyr APIs:
+
+```c
+#include <stdio.h>              // printf (via picolibc)
+#include <zephyr/kernel.h>      // k_sleep, k_thread, k_sem, ...
+#include <zephyr/sys/printk.h>  // printk
+#include <zephyr/drivers/uart.h> // uart_poll_out, uart_fifo_read, ...
+```
+
+The `include/generated/zephyr/devicetree_generated.h` has all the
+hardware addresses as macros, e.g.:
+- `DT_N_S_soc_S_serial_80001000_REG_IDX_0_VAL_ADDRESS` → `0x80001000`
+- `DT_N_S_soc_S_memory_100000_REG_IDX_0_VAL_SIZE` → `0x20000`
+
+### Limitations
+
+- The `zephyr-workspace/` directory must still exist (for Zephyr include
+  headers like `<zephyr/kernel.h>`). You don't need to run west again,
+  but the headers must be reachable.
+- If you change Kconfig options, peripheral configuration, or the device
+  tree, you need to redo the `west build` + `extract_standalone.sh` cycle.
+- Only application code (`src/*.c`) is recompiled. Kernel, drivers, and
+  architecture code are frozen in the `.a` files.
 
 ## Target hardware
 
