@@ -44,10 +44,10 @@
 		};
 
 		mtimer: timer@80000000 {
-			compatible = "riscv,machine-timer";
-			reg = <0x80000000 0x8 0x80000008 0x8>;
-			reg-names = "mtime", "mtimecmp";
+			compatible = "lowrisc,ibex-timer";
+			reg = <0x80000000 0x10>;
 			interrupts-extended = <&hlic 7>;
+			status = "disabled";
 		};
 
 		uart0: serial@80001000 {

@@ -6,3 +6,7 @@
 if(CONFIG_UART_IBEX)
   add_subdirectory(drivers/serial)
 endif()
+
+if(CONFIG_IBEX_TIMER)
+  add_subdirectory(drivers/timer)
+endif()

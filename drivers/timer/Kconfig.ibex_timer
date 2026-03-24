@@ -1,0 +1,12 @@
+# Copyright (c) 2026 Leonardo Fazzini
+# SPDX-License-Identifier: Apache-2.0
+
+config IBEX_TIMER
+	bool "Ibex Reference System timer driver"
+	default y
+	depends on DT_HAS_LOWRISC_IBEX_TIMER_ENABLED
+	select TICKLESS_CAPABLE
+	select TIMER_HAS_64BIT_CYCLE_COUNTER
+	help
+	  Custom system clock driver for the Ibex Reference System
+	  machine timer (64-bit mtime/mtimecmp at 0x80000000).

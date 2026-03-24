@@ -2,3 +2,4 @@
 # SPDX-License-Identifier: Apache-2.0
 
 rsource "drivers/serial/Kconfig.ibex_uart"
+rsource "drivers/timer/Kconfig.ibex_timer"

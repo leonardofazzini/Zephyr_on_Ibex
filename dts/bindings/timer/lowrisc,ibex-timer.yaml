@@ -1,0 +1,24 @@
+# Copyright (c) 2026 Leonardo Fazzini
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Ibex Reference System machine timer.
+
+  64-bit mtime counter incrementing every clock cycle (50 MHz).
+  IRQ asserted when mtime >= mtimecmp, cleared by writing mtimecmp.
+
+  Register map (from hw/Secure-Ibex/vendor/lowrisc_ibex/shared/rtl/timer.sv):
+    0x00  MTIME_LOW      R/W  lower 32 bits of mtime
+    0x04  MTIME_HIGH     R/W  upper 32 bits of mtime
+    0x08  MTIMECMP_LOW   R/W  lower 32 bits of mtimecmp
+    0x0C  MTIMECMP_HIGH  R/W  upper 32 bits of mtimecmp
+
+compatible: "lowrisc,ibex-timer"
+
+include: base.yaml
+
+properties:
+  reg:
+    required: true
+  interrupts-extended:
+    required: true
