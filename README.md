@@ -24,7 +24,8 @@ Zephyr_on_Ibex/
 ├── CMakeLists.txt               # Out-of-tree driver build
 ├── Kconfig                      # Out-of-tree driver Kconfig
 ├── scripts/
-│   └── extract_standalone.sh    # Extract standalone build from west output
+│   ├── extract_standalone.sh    # Extract standalone build from west output
+│   └── extract_c_sources.sh     # Extract all C/H sources used by a build
 ├── Makefile.verilator           # Verilator simulation build
 ├── .venv/                       # Python virtual environment
 └── README.md
@@ -449,6 +450,83 @@ hardware addresses as macros, e.g.:
   tree, you need to redo the `west build` + `extract_standalone.sh` cycle.
 - Only application code (`src/*.c`) is recompiled. Kernel, drivers, and
   architecture code are frozen in the `.a` files.
+
+## Extracting all C sources
+
+If you want a flat folder containing **every `.c` file Zephyr actually
+compiles for your build** — plus the headers needed to recompile them —
+use `scripts/extract_c_sources.sh`. This is different from the standalone
+build: you get full sources (not pre-built `.a`), so you can port the
+project to another build system, analyze the code, or just see exactly
+what gets compiled into the firmware.
+
+### How it works
+
+The script reads `compile_commands.json` (CMake produces it automatically)
+to get the authoritative list of every file compiled, then copies:
+
+- every `.c` (and optionally `.S`) source file
+- every `.h`/`.hpp`/`.inc` header colocated in the same directory as a
+  copied source (needed because `#include "foo.h"` resolves relative to
+  the source file)
+- the entire `<build>/zephyr/include/generated/` tree (`autoconf.h`,
+  `devicetree_generated.h`, `version.h`, `syscall_list.h`, etc.)
+
+It also runs `ninja zephyr/isr_tables.c` first to make sure every
+post-link generated file (notably `isr_tables.c`) exists before copying.
+
+### Usage
+
+```bash
+# Build any sample first
+cd zephyr-workspace
+west build -b secure_ibex zephyr/samples/hello_world -- -DDTC=/usr/bin/dtc
+
+# Extract sources (.c only) into a folder
+cd ..
+scripts/extract_c_sources.sh zephyr-workspace/build sources_dump
+
+# Or include assembly files too (vector tables, context switch, etc.)
+scripts/extract_c_sources.sh zephyr-workspace/build sources_dump --include-asm
+```
+
+### Output layout
+
+```
+sources_dump/
+├── zephyr/             ← files from $ZEPHYR_BASE
+│   ├── kernel/         ← *.c + colocated *.h
+│   ├── arch/riscv/...
+│   ├── drivers/...
+│   ├── lib/...
+│   └── subsys/...
+├── module/             ← files from this project
+│   └── drivers/
+│       ├── serial/uart_ibex.c
+│       └── timer/timer_ibex.c
+└── generated/          ← files produced by the build
+    ├── zephyr/
+    │   ├── isr_tables.c
+    │   └── misc/generated/configs.c
+    └── include/generated/
+        ├── zephyr/
+        │   ├── autoconf.h
+        │   ├── devicetree_generated.h
+        │   ├── version.h
+        │   └── syscall_list.h
+        └── syscalls/*.h
+```
+
+For `hello_world` with default config: ~117 sources + ~17 colocated
+headers + ~124 generated headers = ~258 files total.
+
+### What's NOT included
+
+- Zephyr SDK toolchain (gcc, libgcc, picolibc). The dump is just source —
+  you still need a RISC-V compiler installed.
+- Headers referenced via absolute `-I` paths from external HAL modules.
+  The current Secure-Ibex build doesn't use any, but more complex boards
+  (e.g. ones using `hal_stm32`) would need those copied separately.
 
 ## Target hardware
 
