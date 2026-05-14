@@ -212,6 +212,13 @@ Or with a custom ELF:
 make -f Makefile.verilator sim ELF=path/to/firmware.elf
 ```
 
+>[!danger] Pay attention 
+> By default, the simulator stops after 5,000,000 cycles (~3 seconds wall time), which is enough for non-interactive samples like `hello_world` or `philosophers` to print their output and exit. For interactive samples like `shell_module` you need the simulator to keep running while you type into the PTY. Override the cycle limit with `TERM_CYCLES`:
+>```bash
+>make -f Makefile.verilator sim TERM_CYCLES=0           # run until Ctrl-C
+>make -f Makefile.verilator sim TERM_CYCLES=50000000    # custom cycle limit
+>```
+
 UART output is written to `uart0.log` and to a virtual pseudo-terminal
 (`/dev/pts/N`, printed on stdout at startup).
 

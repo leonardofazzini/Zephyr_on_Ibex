@@ -2,9 +2,11 @@
 # Bypasses FuseSoC/primgen by directly specifying all RTL and C++ files.
 #
 # Usage:
-#   make -f Makefile.verilator build       # Verilate + compile
-#   make -f Makefile.verilator sim ELF=path/to/zephyr.elf  # Run simulation
-#   make -f Makefile.verilator clean       # Clean build artifacts
+#   make -f Makefile.verilator build                          # Verilate + compile
+#   make -f Makefile.verilator sim ELF=path/to/zephyr.elf     # Run simulation
+#   make -f Makefile.verilator sim TERM_CYCLES=0              # Run until Ctrl-C (interactive shell)
+#   make -f Makefile.verilator sim TERM_CYCLES=50000000       # Custom cycle limit
+#   make -f Makefile.verilator clean                          # Clean build artifacts
 
 # ============================================================================
 # Project paths
@@ -23,6 +25,10 @@ MAKE_THREADS  ?= $(shell nproc)
 # ============================================================================
 TOPLEVEL     := ibex_reference_system
 ELF          ?= $(ROOT)/zephyr-workspace/build/zephyr/zephyr.elf
+# Simulator cycle limit. Use TERM_CYCLES=0 (or unset) to run until Ctrl-C —
+# required for interactive samples like shell_module that need user input
+# over the PTY. Default is short enough for non-interactive samples to finish.
+TERM_CYCLES  ?= 5000000
 
 # ============================================================================
 # Directory shorthands (all inside the submodule)
@@ -292,7 +298,8 @@ build: verilate
 	$(MAKE) -C $(BUILD_DIR) -f V$(TOPLEVEL).mk V$(TOPLEVEL) -j$(MAKE_THREADS)
 
 sim: build
-	cd $(HW) && $(BUILD_DIR)/V$(TOPLEVEL) --meminit=ram,$(ELF) --term-after-cycles=5000000
+	cd $(HW) && $(BUILD_DIR)/V$(TOPLEVEL) --meminit=ram,$(ELF) \
+	  $(if $(filter-out 0,$(TERM_CYCLES)),--term-after-cycles=$(TERM_CYCLES),)
 
 clean:
 	rm -rf $(BUILD_DIR)
